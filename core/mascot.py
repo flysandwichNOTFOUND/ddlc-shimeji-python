@@ -7,7 +7,7 @@ from collections import deque
 from pathlib import Path
 
 from PySide6.QtCore import QPoint, QPointF, QTimer, Qt, Signal
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtGui import QCursor, QMouseEvent, QPixmap, QWheelEvent
 from PySide6.QtWidgets import QApplication, QLabel, QWidget
 
 from core.animation import AnimationController
@@ -19,6 +19,12 @@ from ui.context_menu import create_context_menu
 from behaviors.controller import BehaviorController
 from behaviors.drag import DragBehavior
 from behaviors.fall import FallBehavior
+
+
+# Wheel zoom bounds and per-notch step (one notch is 120 angle-delta units).
+ZOOM_MIN = 0.5
+ZOOM_MAX = 2.0
+ZOOM_STEP = 0.1
 
 
 class Mascot(QWidget):
@@ -49,6 +55,9 @@ class Mascot(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.animation = AnimationController.from_character(character_dir, config)
         self.setFixedSize(self.animation.size)
+        self.scale = 1.0
+        self._scaled_cache = {}
+        self.follow_cursor = True
         self.sprite_label = QLabel(self)
         self.sprite_label.setPixmap(self.animation.current_frame)
         self.sprite_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
@@ -116,16 +125,69 @@ class Mascot(QWidget):
                     self.physics.vx = 0.0
         self.animation.play(target)
 
+    def scaled_frame(self, frame: QPixmap) -> QPixmap:
+        """Cache frames scaled to the current zoom so wheel changes stay cheap."""
+        if self.scale == 1.0:
+            return frame
+        key = (frame.cacheKey(), self.scale)
+        scaled = self._scaled_cache.get(key)
+        if scaled is None:
+            scaled = frame.scaled(round(frame.width() * self.scale),
+                                  round(frame.height() * self.scale),
+                                  Qt.AspectRatioMode.IgnoreAspectRatio,
+                                  Qt.TransformationMode.SmoothTransformation)
+            self._scaled_cache[key] = scaled
+        return scaled
+
+    def set_follow_cursor(self, enabled: bool) -> None:
+        self.follow_cursor = enabled
+
+    def face_cursor(self) -> None:
+        """While idle, turn to face the mouse cursor (with a small dead zone)."""
+        center_x = self.physics.x + self.width() / 2
+        cursor_x = QCursor.pos().x()
+        if abs(cursor_x - center_x) > 10:
+            self.direction = 1 if cursor_x > center_x else -1
+
+    def zoom_in(self) -> None:
+        self.set_scale(self.scale + ZOOM_STEP)
+
+    def zoom_out(self) -> None:
+        self.set_scale(self.scale - ZOOM_STEP)
+
+    def reset_zoom(self) -> None:
+        self.set_scale(1.0)
+
     def render_frame(self, horizontal_motion: float | None = None) -> None:
         motion = self.physics.vx if horizontal_motion is None else horizontal_motion
         self.sync_motion_animation(motion)
         self.face_motion(motion)
-        self.sprite_label.setPixmap(self.animation.oriented_frame(self.direction))
+        if abs(motion) <= 0.001 and self.follow_cursor and not self.behaviors.dragging:
+            self.face_cursor()
+        self.sprite_label.setPixmap(self.scaled_frame(self.animation.oriented_frame(self.direction)))
 
     def face_motion(self, horizontal_motion: float) -> None:
         """Moving characters face their motion; stationary poses retain their direction."""
         if abs(horizontal_motion) > 0.001:
             self.direction = 1 if horizontal_motion > 0 else -1
+
+    def set_scale(self, scale: float) -> None:
+        """Resize around the bottom center so the mascot stays planted on its floor."""
+        scale = min(max(scale, ZOOM_MIN), ZOOM_MAX)
+        if abs(scale - self.scale) < 1e-6:
+            return
+        center_x = self.physics.x + self.width() / 2
+        bottom = self.physics.y + self.height()
+        self.scale = scale
+        self._scaled_cache.clear()
+        self.setFixedSize(round(self.animation.size.width() * scale),
+                          round(self.animation.size.height() * scale))
+        self.sprite_label.setGeometry(self.rect())
+        self.physics.x = center_x - self.width() / 2
+        self.physics.y = bottom - self.height()
+        self.resolve_collisions()
+        self.move(round(self.physics.x), round(self.physics.y))
+        self.render_frame()
 
     def resolve_collisions(self) -> None:
         previous = self.display
@@ -263,6 +325,12 @@ class Mascot(QWidget):
             event.accept()
         else:
             super().keyPressEvent(event)
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        delta = event.angleDelta().y()
+        if delta:
+            self.set_scale(self.scale + delta / 120.0 * ZOOM_STEP)
+        event.accept()
 
     def contextMenuEvent(self, event) -> None:
         self.context_menu.popup(event.globalPos())

@@ -23,12 +23,22 @@ def create_context_menu(parent) -> QMenu:
     autonomous = menu.addAction("Autonomous behavior")
     autonomous.setCheckable(True)
     autonomous.triggered.connect(parent.behaviors.set_autonomous)
+    follow = menu.addAction("Follow cursor")
+    follow.setCheckable(True)
+    follow.triggered.connect(parent.set_follow_cursor)
+    zoom = menu.addMenu("Zoom")
+    zoom.addAction("Zoom in").triggered.connect(lambda _checked=False: parent.zoom_in())
+    zoom.addAction("Zoom out").triggered.connect(lambda _checked=False: parent.zoom_out())
+    zoom.addAction("Reset zoom").triggered.connect(lambda _checked=False: parent.reset_zoom())
+    startup = None
 
     def refresh():
         autonomous.setChecked(parent.behaviors.settings.get("autonomous", True))
+        follow.setChecked(parent.follow_cursor)
         force.setEnabled(parent.grounded and not parent.behaviors.dragging)
+        if manager is not None:
+            startup.setChecked(manager.is_startup_enabled())
     menu.aboutToShow.connect(refresh)
-    refresh()
     menu.addSeparator()
     if manager is not None:
         menu.addAction("Spawn another mascot").triggered.connect(
@@ -36,9 +46,13 @@ def create_context_menu(parent) -> QMenu:
         menu.addAction("Remove this mascot").triggered.connect(
             lambda _checked=False: manager.remove(parent))
         menu.addAction("Settings…").triggered.connect(lambda _checked=False: manager.open_settings())
+        startup = menu.addAction("Start with Windows")
+        startup.setCheckable(True)
+        startup.triggered.connect(lambda checked=False: manager.set_startup_enabled(checked))
     else:
         menu.addAction("Remove this mascot").triggered.connect(parent.close)
     menu.addSeparator()
     quit_action = menu.addAction("Quit")
     quit_action.triggered.connect(QApplication.instance().quit)
+    refresh()
     return menu

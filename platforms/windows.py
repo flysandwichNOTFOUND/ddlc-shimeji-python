@@ -1,10 +1,14 @@
-"""Small read-only Win32 adapter. Coordinates returned here are physical pixels."""
+"""Small Win32 adapter: monitors, windows, and the Run-at-login registry entry."""
 
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass
 import os
+from pathlib import Path
 import sys
+
+if sys.platform == "win32":
+    import winreg
 
 
 @dataclass(frozen=True)
@@ -102,3 +106,42 @@ def windows() -> list[NativeWindow]:
 
     user32.EnumWindows(visit, 0)
     return result
+
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_VALUE = "DDLCMascot"
+
+
+def startup_command() -> str:
+    """Command line that relaunches this app, for the Run registry key."""
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    if not pythonw.is_file():
+        pythonw = Path(sys.executable)
+    script = Path(__file__).resolve().parent.parent / "main.py"
+    return f'"{pythonw}" "{script}"'
+
+
+def is_startup_enabled() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_READ) as key:
+            winreg.QueryValueEx(key, RUN_VALUE)
+            return True
+    except OSError:
+        return False
+
+
+def set_startup_enabled(enabled: bool) -> None:
+    if sys.platform != "win32":
+        return
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_WRITE) as key:
+        if enabled:
+            winreg.SetValueEx(key, RUN_VALUE, 0, winreg.REG_SZ, startup_command())
+        else:
+            try:
+                winreg.DeleteValue(key, RUN_VALUE)
+            except FileNotFoundError:
+                pass

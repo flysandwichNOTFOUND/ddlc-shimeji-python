@@ -11,6 +11,8 @@ from config.settings import StartupSettings, save_settings
 from core.mascot import Mascot
 from core.screen import DesktopLayout
 from platforms.window_surfaces import WindowSurfaces
+from platforms.windows import is_startup_enabled as _is_startup_enabled
+from platforms.windows import set_startup_enabled as _set_startup_enabled
 from behaviors.fall import FallBehavior
 from ui.launcher import Launcher
 from ui.tray import MascotTray
@@ -125,6 +127,15 @@ class MascotApplication(QObject):
         finally:
             self._settings_dialog = None
             dialog.deleteLater()
+
+    def is_startup_enabled(self) -> bool:
+        return _is_startup_enabled()
+
+    def set_startup_enabled(self, enabled: bool) -> None:
+        try:
+            _set_startup_enabled(enabled)
+        except OSError as error:
+            QMessageBox.warning(None, "Startup setting failed", str(error))
 
     def shutdown(self):
         self._quitting = True
